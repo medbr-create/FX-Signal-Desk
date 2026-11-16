@@ -44,3 +44,25 @@ Timestamps must have a timezone offset or Z. Files are **not assumed authentic**
 ## Data caveats
 
 Dukascopy provides a distinct historical quote stream. The platform uses source-specific prices that may differ from FundingPips or Exness. Historical BID and ASK must be compared with other trusted sources, and missing/partial days and rate limits must fail visibly. M15/M5 candle timestamps are **bar opens in UTC**, not decision times. Same-bar stop+target outcomes are conservatively classified as SL_AMBIGUOUS.
+
+
+## Alternative historical importer (Node.js, NOT a live signal service)
+
+If the direct Python Dukascopy endpoint fails with 503, a *separate* historical retrieval route has been added through the open-source `dukascopy-node` package:
+
+```bash
+cd gold_compass
+npm install
+node fetch_spot.mjs 2026-11-02 2026-11-15 gold_spot_node_history.json
+cd ..
+python -m gold_compass.backtest gold_compass/gold_spot_node_history.json --out gold_backtest_node_report.json
+```
+
+- Requires Node 20+, and the npm package may require Chromium to retrieve data (depending on its current implementation).
+- Dates are UTC, `from` inclusive / `to` exclusive, maximum 45 calendar days.
+- Pulls **three timeframes (H1/M15/M5) twice (BID/ASK)**, verifies timestamp alignment, rejects missing or invalid prices, and exports the same `bid_ohlc_with_ask` historical schema as the Python backtester.
+- This import path is independent of the Python direct endpoint, **but it has not been executed or verified successfully in GitHub Actions**. Provider failures and rate limits are still possible.
+- Data may not match FundingPips execution quotes. Historical results are not trade recommendations.
+- It is not automatic/live monitoring; no credentials or notifications.
+
+Do **not** activate scheduled workflows or send real-money trading alerts until imported data and backtests have been verified.
