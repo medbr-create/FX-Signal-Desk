@@ -11,6 +11,8 @@ from math import isfinite
 from typing import Any
 
 SOURCE = "dukascopy_spot_bid"
+CSV_SOURCE = "user_supplied_bid_ask_csv"
+ALLOWED_SOURCES = frozenset({SOURCE, CSV_SOURCE})
 SYMBOL = "XAUUSD"
 LOT = 0.07
 OZ_PER_LOT_ASSUMPTION = 100.0  # Check this against the broker contract BEFORE using any amounts.
@@ -79,8 +81,8 @@ def analyze(payload: dict, now: datetime | str | None = None) -> dict:
     'tp' is a hypothetical RR target, never asserted to be a structural target.
     """
     now = _utc(now or datetime.now(timezone.utc))
-    if payload.get("source") != SOURCE or payload.get("symbol") != SYMBOL:
-        return {"state": "NO_DATA", "reason": "Only explicitly identified spot XAUUSD Dukascopy BID data accepted"}
+    if payload.get("source") not in ALLOWED_SOURCES or payload.get("symbol") != SYMBOL:
+        return {"state": "NO_DATA", "reason": "Only independently labeled Spot XAUUSD Dukascopy or user-supplied BID/ASK CSV data accepted"}
     try:
         h1 = _closed(payload.get("h1", []), 60, now)
         m15 = _closed(payload.get("m15", []), 15, now)
@@ -178,7 +180,7 @@ def analyze(payload: dict, now: datetime | str | None = None) -> dict:
         # Structural target must be validated independently before real trading.
         hypothetical_tp = entry + (1 if side == "BUY" else -1) * stop_distance * MIN_RR
         return {
-            "state": "REVIEW", "direction": side, "symbol": SYMBOL, "source": SOURCE,
+            "state": "REVIEW", "direction": side, "symbol": SYMBOL, "source": payload["source"],
             "last_closed_m15_utc": m15_close_time.isoformat(),
             "last_closed_m5_utc": m5_close_time.isoformat(),
             "m15_setup_reference": round(confirm["close"], 3),
