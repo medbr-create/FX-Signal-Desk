@@ -12,6 +12,7 @@ import json
 import lzma
 from pathlib import Path
 import struct
+import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -67,20 +68,30 @@ def _decode(compressed: bytes, day: date) -> list[dict]:
     return [out[k] for k in sorted(out)]
 
 
-def download_day(day: date, side: str, *, timeout: int = 18) -> tuple[list[dict] | None, str]:
-    """A 404 denotes no data that day. Timeout/429/5xx is an ERROR, never an empty market."""
+def download_day(day: date, side: str, *, timeout: int = 28, attempts: int = 3) -> tuple[list[dict] | None, str]:
+    """Retry transient failures; a 404 means no quoted data that day, never fake prices."""
     url = candle_url(day, side)
     request = Request(url, headers={"User-Agent": "GoldCompassResearch/0.1"})
-    try:
-        with urlopen(request, timeout=timeout) as response:
-            compressed = response.read()
-    except HTTPError as exc:
-        if exc.code == 404:
-            return None, url
-        raise RuntimeError(f"Dukascopy {side} {day} HTTP {exc.code}") from exc
-    except (URLError, TimeoutError) as exc:
-        raise RuntimeError(f"Dukascopy {side} {day} unavailable: {exc}") from exc
-    return _decode(compressed, day), url
+    if not 1 <= attempts <= 5:
+        raise ValueError("attempts must be between 1 and 5")
+    last_error = None
+    for attempt in range(attempts):
+        try:
+            with urlopen(request, timeout=timeout) as response:
+                compressed = response.read()
+            return _decode(compressed, day), url
+        except HTTPError as exc:
+            if exc.code == 404:
+                return None, url
+            if exc.code not in (408, 429, 500, 502, 503, 504):
+                raise RuntimeError(f"Dukascopy {side} {day} HTTP {exc.code}") from exc
+            last_error = f"HTTP {exc.code}"
+        except (URLError, TimeoutError, ConnectionError) as exc:
+            last_error = str(exc)
+        if attempt < attempts - 1:
+            # Respect public provider by backing off after a temporary rate-limit/outage.
+            time.sleep(min(2 ** (attempt + 1), 8))
+    raise RuntimeError(f"Dukascopy {side} {day} unavailable after {attempts} tries: {last_error}")
 
 
 def pair_minutes(bid: list[dict], ask: list[dict]) -> list[dict]:
