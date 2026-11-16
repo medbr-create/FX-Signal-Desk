@@ -5,9 +5,9 @@
   "type": "module",
   "description": "Read-only XAUUSD spot bid and ask historical-data import",
   "scripts": {
-    "fetch-spot": "node gold_compass/fetch_spot.mjs"
+    "fetch-spot": "node fetch_spot.mjs"
   },
   "dependencies": {
-    "dukascopy-node": "^1.40.0"
+    "dukascopy-node": "1.51.1"
   }
 }
