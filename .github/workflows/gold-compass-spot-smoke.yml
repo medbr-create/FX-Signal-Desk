@@ -1,9 +1,9 @@
 name: Gold Compass short historical spot data smoke test
 
+# Disabled automatic runs after Dukascopy responded with HTTP 503 / rate limits.
+# Use manual dispatch only when the provider is verified available again.
 on:
-  pull_request:
-    paths:
-      - ".github/workflows/gold-compass-spot-smoke.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
