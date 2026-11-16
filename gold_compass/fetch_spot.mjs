@@ -51,30 +51,37 @@ function clean(candles, interval) {
 }
 
 try {
-  const result = {source:"dukascopy_spot_bid",symbol:"XAUUSD",price_basis:"BID",
-    period_utc:{from,to},generated_utc:new Date().toISOString(),
-    verification:"Downloaded directly using dukascopy-node, user must verify quotes against broker",
-    h1:[],m15:[],m5:[],ask:{h1:[],m15:[],m5:[]}};
+  const result = {source:"dukascopy_spot_bid",symbol:"XAUUSD",
+    quote_basis:"bid_ohlc_with_ask",mode:"HISTORICAL_ONLY",
+    period_utc:{from,to},generated_at_utc:new Date().toISOString(),
+    source_disclaimer:"Dukascopy spot BID/ASK is independent of FundingPips quotes",
+    h1:[],m15:[],m5:[]};
   for (const interval of ["h1","m15","m5"]) {
     console.error("Fetching",interval,"BID and ASK");
-    const bid = await getHistoricalRates(makeConfig(interval, "bid"));
-    const ask = await getHistoricalRates(makeConfig(interval, "ask"));
-    result[interval] = clean(bid, interval);
-    result.ask[interval] = clean(ask, interval);
-    const bidTimes = new Set(result[interval].map(b=>b.timestamp));
-    const askTimes = new Set(result.ask[interval].map(b=>b.timestamp));
-    // Do not silently accept mismatched bar availability.
-    if (result[interval].length < 45 || result.ask[interval].length < 45 ||
-        bidTimes.size !== askTimes.size ||
-        [...bidTimes].some(t=>!askTimes.has(t))) {
+    const bidBars = clean(await getHistoricalRates(makeConfig(interval, "bid")), interval);
+    const askBars = clean(await getHistoricalRates(makeConfig(interval, "ask")), interval);
+    const bidTimes = new Set(bidBars.map(b=>b.timestamp));
+    const askTimes = new Set(askBars.map(b=>b.timestamp));
+    if (bidBars.length < 45 || askBars.length < 45 ||
+        bidTimes.size !== askTimes.size || [...bidTimes].some(t=>!askTimes.has(t))) {
       throw new Error("Missing/misaligned BID/ASK data for "+interval+"; refusing to export");
     }
+    const askLookup = new Map(askBars.map(a=>[a.timestamp,a]));
+    result[interval] = bidBars.map(b => {
+      const a = askLookup.get(b.timestamp);
+      if (a.open < b.open || a.close < b.close) {
+        throw new Error("Negative BID/ASK spread for "+interval+" "+b.timestamp);
+      }
+      return {...b,ask_open:a.open,ask_high:a.high,ask_low:a.low,ask_close:a.close,
+        spread_close:Number((a.close-b.close).toFixed(4))};
+    });
   }
   const outfile = output || `gold-compass-${from}-${to}.json`;
   fs.mkdirSync(path.dirname(path.resolve(outfile)), {recursive:true});
+  if (fs.existsSync(outfile)) throw new Error("Refusing to overwrite existing historical snapshot");
   fs.writeFileSync(outfile,JSON.stringify(result,null,2));
-  console.error("Saved verified-schema spot BID/ASK JSON to",outfile);
-  console.error("Historical snapshot only. NO LIVE SIGNALS; no data from FundingPips.");
+  console.error("Saved independent spot BID/ASK historical snapshot to",outfile);
+  console.error("Historical RESEARCH only. No alerts, no FundingPips access.");
 } catch(e) {
   console.error("Spot download failed; refusing to emit partial history:",e?.message||String(e));
   process.exit(1);
