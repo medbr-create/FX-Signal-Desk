@@ -1,0 +1,56 @@
+name: Gold Compass one-time historical spot data smoke test
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/gold-compass-spot-smoke.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify-spot-history:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Download past spot BID+ASK candles only (no live feed, accounts or orders)
+        shell: bash
+        run: |
+          set -euo pipefail
+          END=$(date -u -d 'yesterday' +%F)
+          START=$(date -u -d '13 days ago' +%F)
+          echo "Historical source check from $START to $END"
+          python -m gold_compass.dukascopy --start "$START" --end "$END" --out gold_spot_history.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          x=json.loads(Path("gold_spot_history.json").read_text())
+          assert x["source"]=="dukascopy_spot_bid" and x["quote_basis"]=="bid_ohlc_with_ask"
+          assert len(x["h1"])>=45 and len(x["m15"])>=45 and len(x["m5"])>=45
+          print("H1/M15/M5:",len(x["h1"]),len(x["m15"]),len(x["m5"]))
+          print("First spot close:", x["m5"][0]["close"],"Last spot close:",x["m5"][-1]["close"])
+          print("Last paired spread:",x["m5"][-1]["spread_close"])
+          PY
+      - name: Generate conservative research backtest, not a trading signal
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m gold_compass.backtest gold_spot_history.json --out gold_backtest_report.json
+          python - <<'PY'
+          import json
+          r=json.load(open("gold_backtest_report.json"))
+          print("HISTORICAL RESEARCH ONLY")
+          print("Trades:",r["trade_count"],"TP:",r["tp_count"],"SL:",r["sl_count_including_ambiguous"],"TIMEOUT:",r["timeout_count"])
+          print("TP/SL Win%:",r["tp_vs_sl_win_rate_pct"])
+          print("Estimated USD (not FundingPips fill):",r["net_pnl_usd_estimate"])
+          print("Not a validated strategy or trading recommendation")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gold-compass-spot-smoke-research-only
+          path: gold_backtest_report.json
+          retention-days: 7
