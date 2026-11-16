@@ -1,0 +1,61 @@
+name: Gold Compass read-only research checks
+
+on:
+  pull_request:
+    paths:
+      - "gold_compass/**"
+      - "tests/test_gold_compass*.py"
+      - ".github/workflows/gold-compass-research.yml"
+  workflow_dispatch:
+    inputs:
+      download_historical_spot:
+        description: "Download ~13 past UTC days of Spot XAUUSD BID and ASK for a research replay (no account access)"
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run standalone offline Gold Compass tests
+        run: |
+          python -m pip install pytest
+          python -m pytest -q tests/test_gold_compass.py tests/test_gold_compass_data.py
+      - name: Optional past-spot-price download and research replay
+        if: github.event_name == 'workflow_dispatch' && inputs.download_historical_spot
+        shell: bash
+        run: |
+          set -euo pipefail
+          END=$(date -u -d 'yesterday' +%F)
+          START=$(date -u -d '13 days ago' +%F)
+          python -m gold_compass.dukascopy --start "$START" --end "$END" --out gold_spot_history.json
+          python -m gold_compass.backtest gold_spot_history.json --out gold_backtest_report.json
+          python - <<'PY'
+          import json
+          data = json.load(open("gold_backtest_report.json"))
+          with open("research-summary.txt", "w") as f:
+              f.write("RESEARCH ONLY - NOT LIVE SIGNALS\n")
+              f.write(f"Trades: {data['trade_count']}\n")
+              f.write(f"TP: {data['tp_count']} | SL: {data['sl_count_including_ambiguous']} | TIMEOUT: {data['timeout_count']}\n")
+              f.write(f"TP vs SL win rate: {data['tp_vs_sl_win_rate_pct']}%\n")
+              f.write(f"Net hypothetical PnL: {data['net_pnl_usd_estimate']} USD\n")
+              f.write("Not enough data to prove an edge. Source, costs and execution differ from FundingPips.\n")
+          PY
+          cat research-summary.txt
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'workflow_dispatch' && inputs.download_historical_spot && success()
+        with:
+          name: gold-compass-historical-research-report
+          path: |
+            gold_backtest_report.json
+            research-summary.txt
+          retention-days: 7

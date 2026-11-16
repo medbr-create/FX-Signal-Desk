@@ -7,3 +7,32 @@ reports/
 history/
 trading.json
 *.local.json
+
+# Gold Compass: personal/private material must NEVER be committed.
+# Public code is visible to everyone until repository visibility is changed.
+.env.*
+!.env.example
+**/secrets/
+**/.secrets/
+**/credentials/
+*.pem
+*.key
+*.p12
+*.pfx
+*.sqlite
+*.sqlite3
+*.db
+*.bi5
+*.csv
+*.tsv
+**/.dukascopy-cache/
+**/private/
+**/personal/
+**/account-data/
+**/trade-journal/
+gold_spot_history*.json
+gold*history*.json
+gold_backtest_report*.json
+gold*report*.json
+gold-compass-*.json
+research-summary.txt
