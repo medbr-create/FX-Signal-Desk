@@ -6,6 +6,7 @@ import unittest
 
 from gold_compass.dukascopy import _decode, candle_url, make_bars, pair_minutes
 from gold_compass.backtest import _resolve_trade, backtest
+from gold_compass.import_csv import from_csv_bytes
 
 
 def minute(ts, bid_open=4000.0, ask_open=4000.3):
@@ -52,6 +53,29 @@ class DukascopyResearchDataTests(unittest.TestCase):
         paired = pair_minutes([d["bid"]], [d["ask"]])
         self.assertEqual(len(paired), 1)
         self.assertGreater(paired[0]["spread_close"], 0)
+
+
+class CSVFallbackTests(unittest.TestCase):
+    def test_offline_csv_builds_aligned_complete_bars(self):
+        header = "timestamp,bid_open,bid_high,bid_low,bid_close,ask_open,ask_high,ask_low,ask_close"
+        base = datetime(2026, 11, 12, 8, tzinfo=timezone.utc)
+        rows = [header]
+        for i in range(60):
+            t = (base + timedelta(minutes=i)).isoformat()
+            rows.append(f"{t},4000,4001,3999,4000.2,4000.3,4001.3,3999.3,4000.5")
+        report = from_csv_bytes(("\\n".join(rows)).replace("\\n", "\n").encode("utf-8"))
+        self.assertEqual(report["source"], "user_supplied_bid_ask_csv")
+        self.assertEqual((len(report["m5"]), len(report["m15"]), len(report["h1"])), (12, 4, 1))
+
+    def test_naive_csv_timezone_rejected(self):
+        data = ("timestamp,bid_open,bid_high,bid_low,bid_close,ask_open,ask_high,ask_low,ask_close\n"
+                "2026-11-12T08:00:00,4000,4001,3999,4000.2,4000.3,4001.3,3999.3,4000.5").encode()
+        with self.assertRaises(ValueError):
+            from_csv_bytes(data)
+
+    def test_missing_ask_columns_rejected(self):
+        with self.assertRaises(ValueError):
+            from_csv_bytes(b"timestamp,bid_open\n2026-11-12T08:00:00Z,4000")
 
 
 class GoldCompassReplayTests(unittest.TestCase):
