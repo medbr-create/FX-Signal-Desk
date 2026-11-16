@@ -12,7 +12,7 @@ import argparse
 import json
 from math import isfinite
 
-from .engine import SOURCE, LOT, OZ_PER_LOT_ASSUMPTION, RISK_USD_CAP, analyze
+from .engine import SOURCE, ALLOWED_SOURCES, LOT, OZ_PER_LOT_ASSUMPTION, RISK_USD_CAP, analyze
 
 
 def _close_time(bar: dict, minutes: int) -> datetime:
@@ -20,8 +20,8 @@ def _close_time(bar: dict, minutes: int) -> datetime:
 
 
 def _check_asks(payload: dict) -> None:
-    if payload.get("source") != SOURCE or payload.get("symbol") != "XAUUSD":
-        raise ValueError("Backtest requires Dukascopy Spot XAUUSD labeled candles")
+    if payload.get("source") not in ALLOWED_SOURCES or payload.get("symbol") != "XAUUSD":
+        raise ValueError("Backtest requires labeled Spot XAUUSD BID/ASK candles")
     if payload.get("quote_basis") != "bid_ohlc_with_ask" or payload.get("mode") != "HISTORICAL_ONLY":
         raise ValueError("Backtest requires verified-form paired historical BID and ASK OHLC")
     for key in ("h1", "m15", "m5"):
@@ -101,7 +101,7 @@ def backtest(payload: dict, *, max_holding_bars: int = 24,
             continue
         # Send only historical information visible at decision time.
         snapshot = {
-            "source": SOURCE, "symbol": "XAUUSD",
+            "source": payload["source"], "symbol": "XAUUSD",
             "h1": [b for b in h1 if _close_time(b, 60) <= decision][-260:],
             "m15": [b for b in m15 if _close_time(b, 15) <= decision][-300:],
             "m5": m5[max(0, i - 400):i + 1],
@@ -158,7 +158,7 @@ def backtest(payload: dict, *, max_holding_bars: int = 24,
     timeout = sum(t["outcome"] == "TIMEOUT" for t in taken)
     return {
         "state": "HISTORICAL_RESEARCH_ONLY", "symbol": "XAUUSD",
-        "source": SOURCE, "quote_basis": payload["quote_basis"],
+        "source": payload["source"], "quote_basis": payload["quote_basis"],
         "time_zone_for_daily_limits": "UTC", "trade_count": len(taken),
         "tp_count": tp, "sl_count_including_ambiguous": sl,
         "timeout_count": timeout,
