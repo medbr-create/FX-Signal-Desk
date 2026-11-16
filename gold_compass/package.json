@@ -1,0 +1,13 @@
+{
+  "name": "gold-trade-compass-data",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Read-only XAUUSD spot bid and ask historical-data import",
+  "scripts": {
+    "fetch-spot": "node gold_compass/fetch_spot.mjs"
+  },
+  "dependencies": {
+    "dukascopy-node": "^1.40.0"
+  }
+}
