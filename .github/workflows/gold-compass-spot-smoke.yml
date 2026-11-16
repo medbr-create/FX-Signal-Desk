@@ -1,4 +1,4 @@
-name: Gold Compass one-time historical spot data smoke test
+name: Gold Compass short historical spot data smoke test
 
 on:
   pull_request:
@@ -21,9 +21,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          END=$(date -u -d 'yesterday' +%F)
-          START=$(date -u -d '13 days ago' +%F)
-          echo "Historical source check from $START to $END"
+          # Small fixed past weekday sample after a rate-limit on a longer request.
+          # This smoke test checks source decoding, NOT six-day results or profitability.
+          START=2026-11-03
+          END=2026-11-05
+          echo "Short historical spot decoding smoke check from $START to $END"
           python -m gold_compass.dukascopy --start "$START" --end "$END" --out gold_spot_history.json
           python - <<'PY'
           import json
