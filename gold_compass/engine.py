@@ -1,4 +1,4 @@
-"""Gold Trade Compass: strictly read-only XAUUSD H1/M15 review engine.
+"""Gold Trade Compass: strictly read-only XAUUSD H1/M15/M5 review engine.
 
 Independent from the original FX Signal Desk scanner and all broker adapters.
 No network calls, trading orders, account access, or notifications in this module.
@@ -73,7 +73,7 @@ def _wait(reason: str, **kwargs) -> dict:
 
 
 def analyze(payload: dict, now: datetime | str | None = None) -> dict:
-    """Return a REVIEW candidate only after an H1 bias and M15 breakout/retest/confirmation.
+    """Return REVIEW only after closed H1 bias, M15 setup, and M5 entry confirmation.
 
     This is an exploratory deterministic filter, NOT a validated profitable strategy.
     'tp' is a hypothetical RR target, never asserted to be a structural target.
@@ -84,22 +84,34 @@ def analyze(payload: dict, now: datetime | str | None = None) -> dict:
     try:
         h1 = _closed(payload.get("h1", []), 60, now)
         m15 = _closed(payload.get("m15", []), 15, now)
+        m5 = _closed(payload.get("m5", []), 5, now)
     except (ValueError, TypeError, KeyError, OverflowError) as exc:
         return {"state": "NO_DATA", "reason": f"Rejected malformed candles: {exc}"}
-    if len(h1) < 45 or len(m15) < 45:
-        return {"state": "NO_DATA", "reason": "Insufficient CLOSED candles", "h1_bars": len(h1), "m15_bars": len(m15)}
+    if len(h1) < 45 or len(m15) < 45 or len(m5) < 45:
+        return {"state": "NO_DATA", "reason": "Insufficient CLOSED candles",
+                "h1_bars": len(h1), "m15_bars": len(m15), "m5_bars": len(m5)}
     h_age = (now - (h1[-1]["timestamp"] + timedelta(hours=1))).total_seconds() / 60
     m_age = (now - (m15[-1]["timestamp"] + timedelta(minutes=15))).total_seconds() / 60
-    if h_age > 75 or m_age > 30:
-        return {"state": "NO_DATA", "reason": "Stale prices: no current analysis", "h1_age_min": round(h_age, 1), "m15_age_min": round(m_age, 1)}
+    five_age = (now - (m5[-1]["timestamp"] + timedelta(minutes=5))).total_seconds() / 60
+    if h_age > 75 or m_age > 30 or five_age > 10:
+        return {"state": "NO_DATA", "reason": "Stale prices: no current analysis",
+                "h1_age_min": round(h_age, 1), "m15_age_min": round(m_age, 1),
+                "m5_age_min": round(five_age, 1)}
     closes = [b["close"] for b in h1]
     current_ema, last_ema = _ema(closes, 20)[-2:]
     side = "BUY" if closes[-1] > last_ema > current_ema else ("SELL" if closes[-1] < last_ema < current_ema else None)
     if side is None:
         return _wait("H1 has no aligned close and rising/falling EMA20")
     a = _atr(m15)
-    if not a:
-        return _wait("M15 ATR unavailable")
+    a5 = _atr(m5)
+    if not a or not a5:
+        return _wait("M15 / M5 ATR unavailable")
+    m15_close_time = m15[-1]["timestamp"] + timedelta(minutes=15)
+    m5_close_time = m5[-1]["timestamp"] + timedelta(minutes=5)
+    if m5_close_time <= m15_close_time:
+        return _wait("M15 setup is ready; waiting for a fully CLOSED M5 trigger")
+    if m5_close_time > m15_close_time + timedelta(minutes=15):
+        return _wait("M5 trigger window expired; wait for new M15 confirmation")
     last_idx = len(m15) - 1
     confirm, retest = m15[last_idx], m15[last_idx - 1]
     body = abs(confirm["close"] - confirm["open"])
@@ -133,7 +145,28 @@ def analyze(payload: dict, now: datetime | str | None = None) -> dict:
             sl = retest["high"] + 0.15 * a
         if not (broken and touched and valid_retest and intervening):
             continue
-        entry = confirm["close"]
+        trigger, previous5 = m5[-1], m5[-2]
+        trigger_body = abs(trigger["close"] - trigger["open"])
+        if trigger_body < 0.25 * a5:
+            return _wait("M5 trigger candle body too small", bias=side)
+        if side == "BUY":
+            triggered = trigger["close"] > trigger["open"] and trigger["close"] > previous5["high"] + 0.02 * a5
+            holding = trigger["close"] >= level - tol
+        else:
+            triggered = trigger["close"] < trigger["open"] and trigger["close"] < previous5["low"] - 0.02 * a5
+            holding = trigger["close"] <= level + tol
+        if not holding:
+            return _wait("M5 closed back beyond M15 breakout zone", bias=side)
+        if not triggered:
+            return _wait("Waiting for M5 close through previous M5 high/low", bias=side)
+        # M5 refines timing, but does NOT silently widen the structural M15 SL.
+        entry = trigger["close"]
+        original_risk = ((confirm["close"] - sl) if side == "BUY" else (sl - confirm["close"]))
+        if original_risk <= 0:
+            return _wait("Invalid M15 reference stop", bias=side)
+        moved = ((entry - confirm["close"]) if side == "BUY" else (confirm["close"] - entry))
+        if moved > 0.50 * original_risk:
+            return _wait("M5 entry chased more than 0.5R from M15 confirmation", bias=side)
         stop_distance = (entry - sl) if side == "BUY" else (sl - entry)
         if stop_distance <= 0:
             return _wait("Invalid structural stop", bias=side)
@@ -146,16 +179,20 @@ def analyze(payload: dict, now: datetime | str | None = None) -> dict:
         hypothetical_tp = entry + (1 if side == "BUY" else -1) * stop_distance * MIN_RR
         return {
             "state": "REVIEW", "direction": side, "symbol": SYMBOL, "source": SOURCE,
-            "last_closed_m15_utc": (confirm["timestamp"] + timedelta(minutes=15)).isoformat(),
+            "last_closed_m15_utc": m15_close_time.isoformat(),
+            "last_closed_m5_utc": m5_close_time.isoformat(),
+            "m15_setup_reference": round(confirm["close"], 3),
+            "m5_trigger": "closed candle break of previous M5 extreme",
             "setup_id": f"{side}:{b['timestamp'].isoformat()}:{level:.3f}",
             "entry_reference": round(entry, 3), "sl_reference": round(sl, 3),
             "hypothetical_rr2_tp": round(hypothetical_tp, 3),
             "estimated_risk_usd": round(risk, 2), "assumed_lot": LOT,
             "breakout_level": round(level, 3), "h1_bias": side,
-            "warnings": ["REVIEW only: no orders or automatic alerts", "Target is a hypothetical 2R example, not a proven structural TP",
+            "warnings": ["REVIEW only: no orders or automatic alerts", "M5 confirmation is an unvalidated entry filter",
+                         "Target is a hypothetical 2R example, not a proven structural TP",
                          "Spread, slippage, commission and actual contract specifications are NOT accounted for"],
         }
-    return _wait("No valid M15 breakout + retest before latest closed confirmation", bias=side)
+    return _wait("No valid M15 breakout + retest before latest closed confirmation; M5 cannot create a setup", bias=side)
 
 
 if __name__ == "__main__":
