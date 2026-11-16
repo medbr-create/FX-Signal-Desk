@@ -49,10 +49,12 @@ def _resolve_trade(bars: list[dict], start: int, side: str, entry: float,
         b = bars[j]
         if side == "BUY":
             stop_hit, target_hit = b["low"] <= sl, b["high"] >= target
-            bad_price, good_price = sl - exit_slippage, target - exit_slippage
+            # A gap through the stop must be filled at the worse available BID open.
+            bad_price, good_price = min(sl, b["open"]) - exit_slippage, target - exit_slippage
         else:
             stop_hit, target_hit = b["ask_high"] >= sl, b["ask_low"] <= target
-            bad_price, good_price = sl + exit_slippage, target + exit_slippage
+            # SELL stop exits on ASK; an upward gap can exceed the planned stop.
+            bad_price, good_price = max(sl, b["ask_open"]) + exit_slippage, target + exit_slippage
         if stop_hit:
             return {"exit_idx": j, "exit_price": bad_price,
                     "outcome": "SL_AMBIGUOUS" if target_hit else "SL"}
@@ -116,6 +118,12 @@ def backtest(payload: dict, *, max_holding_bars: int = 24,
             continue
         seen.add(setup_id)
         next_bar = m5[i + 1]
+        next_open = datetime.fromisoformat(next_bar["timestamp"].replace("Z", "+00:00"))
+        if next_open != decision:
+            reason_counts["Missing immediate next M5 bar; no simulated fill"] = reason_counts.get(
+                "Missing immediate next M5 bar; no simulated fill", 0) + 1
+            i += 1
+            continue
         side, sl = result["direction"], result["sl_reference"]
         # Adverse slippage applied at fill; BID/ASK spread is already in actual quote side.
         fill = ((next_bar["ask_open"] + entry_slippage_usd_oz) if side == "BUY"
