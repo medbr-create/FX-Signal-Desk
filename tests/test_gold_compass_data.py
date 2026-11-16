@@ -58,19 +58,28 @@ class GoldCompassReplayTests(unittest.TestCase):
     def test_stop_first_if_same_bar_touches_both_long(self):
         ts = datetime(2026, 11, 12, 8, tzinfo=timezone.utc)
         row = minute(ts)
-        bar = {"timestamp": row["timestamp"], "high": 4005, "low": 3995,
-               "close": 4000, "ask_high": 4005.3, "ask_low": 3995.3, "ask_close": 4000.3}
+        bar = {"timestamp": row["timestamp"], "open": 4000, "high": 4005, "low": 3995,
+               "close": 4000, "ask_open": 4000.3, "ask_high": 4005.3, "ask_low": 3995.3, "ask_close": 4000.3}
         r = _resolve_trade([bar], 0, "BUY", 4000.3, 3998, 4004, 1, 0.1)
         self.assertEqual(r["outcome"], "SL_AMBIGUOUS")
         self.assertAlmostEqual(r["exit_price"], 3997.9)
 
     def test_short_exits_on_ask_not_bid(self):
         ts = datetime(2026, 11, 12, 8, tzinfo=timezone.utc)
-        bar = {"timestamp": ts.isoformat(), "high": 4000, "low": 3999,
+        bar = {"timestamp": ts.isoformat(), "open": 3999.7, "ask_open": 4000.0, "high": 4000, "low": 3999,
                "close": 3999.5, "ask_high": 4000.4, "ask_low": 3999.4, "ask_close": 3999.8}
         # Bid high never touches 4000.2, but ask high does, so SELL SL is hit.
         r = _resolve_trade([bar], 0, "SELL", 4000, 4000.2, 3990, 1, 0.1)
         self.assertEqual(r["outcome"], "SL")
+
+    def test_worse_stop_gap_fill_long(self):
+        ts = datetime(2026, 11, 12, 8, tzinfo=timezone.utc)
+        bar = {"timestamp": ts.isoformat(), "open": 3996.0, "high": 4000,
+               "low": 3995, "close": 3997, "ask_open": 3996.3,
+               "ask_high": 4000.3, "ask_low": 3995.3, "ask_close": 3997.3}
+        r = _resolve_trade([bar], 0, "BUY", 4000.3, 3998, 4004, 1, 0.1)
+        self.assertEqual(r["outcome"], "SL")
+        self.assertAlmostEqual(r["exit_price"], 3995.9)
 
     def test_rejects_unpaired_or_futures_backtest(self):
         with self.assertRaises(ValueError):
