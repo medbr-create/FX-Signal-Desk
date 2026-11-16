@@ -1,39 +1,38 @@
-# Gold Trade Compass — Safe experimental prototype
+# Gold Trade Compass — XAUUSD spot research prototype
 
-This is an **independent, offline, read-only** H1/M15/M5 prototype on the branch `feature/gold-compass-spot-h1-m15`.
+**Standalone read-only research files** on `feature/gold-compass-spot-h1-m15`. Nothing here connects to FundingPips/MT5, submits orders, enables broker EA, sends alerts, or depends on TradingView/Pine.
 
-## What exists
+## Completed code
 
-- Deterministic closed-candle H1 EMA20 bias, M15 breakout -> retest -> M15 confirmation and M5 execution confirmation. The latest M5 candle must close after the M15 confirmation and within a 15-minute window.
-- Freshness guard and OHLC validation; no future/incomplete candle use; M5 may refine the entry timing but does not silently widen the M15 stop.
-- Conservative fixed 0.07 standard-lot **assumption** with a default $30 estimate cap and absolute $45 cap.
-- Read-only JSON CLI: `python -m gold_compass.scan OHLC.json`.
-- Unit tests: `python -m unittest tests.test_gold_compass -v`.
-- A `REVIEW` result is **not a confirmed trade**; it requires independent structural target, quote, costs, contract and broker rule checks.
+- `gold_compass/engine.py`: H1 closed-candle EMA20 directional bias, M15 breakout/retest/closed confirmation, M5 *post-M15-close* confirmation on prior M5 extreme. M5 is an additional gate, not a new setup.
+- `gold_compass/dukascopy.py`: downloads **HISTORICAL ONLY** paired spot XAUUSD 1m BID and ASK public Dukascopy candle files; validates LZMA / 24-byte record, UTC timestamps and point scale 1000; builds H1/M15/M5 from the same complete 1-minute buckets. Missing minutes are never fabricated. No API token or account needed. 14 calendar days max per request.
+- `gold_compass/backtest.py`: conservative offline bar replay. Decision at M5 close, simulated entry at NEXT M5 open, BUY pays ASK/SELL receives BID; BUY exits use BID, SELL exits use ASK; stop wins when one bar hits both stop and TP. Tracks SL, TP, SL_AMBIGUOUS, TIMEOUT, P/L, risk and UTC daily limits.
+- `gold_compass/viewer.html`: Arabic responsive **local file** report viewer. Upload a JSON report from your device. It is NOT a live price dashboard; the file is parsed locally in your browser and is not uploaded to us.
+- `tests/test_gold_compass.py` and `tests/test_gold_compass_data.py`: tests for inputs, M5 after M15 close, decoded BID/ASK data, incomplete-bar rejection, and stop-first backtest logic.
 
-## Data input
+## Offline research workflow (no broker credentials)
 
-**No spot price API has been connected yet.** A real trusted provider or a verified historical export is required, and you must verify whether the values are spot BID vs ASK vs MID. This module deliberately rejects the original Yahoo `GC=F` futures symbol pretending to be XAUUSD.
+Python 3.12+ and standard library only are enough for these new modules.
 
-Input JSON example structure (replace entries with **real, UTC, time-zone-tagged** candle open times):
-```json
-{
-  "source": "dukascopy_spot_bid",
-  "symbol": "XAUUSD",
-  "h1": [{"timestamp":"2026-11-16T15:00:00Z","open":4000,"high":4002,"low":3997,"close":4001}],
-  "m15": [{"timestamp":"2026-11-16T15:45:00Z","open":4000,"high":4001,"low":3998,"close":4000.5}],
-  "m5": [{"timestamp":"2026-11-16T16:00:00Z","open":4000.5,"high":4001,"low":4000,"close":4000.75}]
-}
-```
-The example is intentionally too short to produce a review. Supply 45+ **fully closed** candles per timeframe, including `m5`; the JSON input must contain `h1`, `m15`, and `m5` arrays. Candle timestamps mean **bar start**, not bar close. The exact `source` tag is a provenance assertion by the caller, not an independent authenticity check.
+1. Download completed UTC historical dates (e.g. not today). 14-day maximum, one batch at a time. The remote historical endpoints may fail or throttle. **Never treat such failure as an empty signal.**
+   `python -m gold_compass.dukascopy --start 2026-11-02 --end 2026-11-15 --out gold_spot_history.json`
+2. Replay conservative research (no execution):
+   `python -m gold_compass.backtest gold_spot_history.json --out gold_backtest_report.json`
+3. Open `gold_compass/viewer.html` locally in a browser and choose the generated `gold_backtest_report.json`.
+4. Run unit tests locally:
+   `python -m pytest tests/test_gold_compass.py tests/test_gold_compass_data.py -q`
 
-## Important restrictions
+## What is NOT claimed or implemented
 
-- The original `fxbot` workflows/auto-trading are **not changed or enabled** by this prototype. Do not use them for FundingPips.
-- No MT5/FundingPips login, password, EA, account connection, automation or order routing.
-- No live alerts, hosting or performance claim yet.
-- No strategy backtest or win rate yet. M5 execution logic is only a prototype and remains unvalidated. First validate historical spot data, quote basis, spreads, commissions, slippage, tick size, and any same-bar ambiguity.
-- Keep **TradingView / Pine Script** out of this implementation.
-- Synthetic tests only establish code behavior, **not trading profitability**.
+- **The above commands have NOT been run or verified against a real Dukascopy download in this chat.** GitHub Actions on the fork currently reports no workflow runs. These are new, unverified research utilities awaiting CI and real-data validation.
+- No verified live spot feed or real-time monitoring; no Telegram or iPhone notifications; no published website; no broker access.
+- This is **not** the final user-approved A+ strategy. The example stop uses M15 retest structure and TP uses a hypothetical 2R target, which has not been validated as an available nearby target.
+- Backtest dollar P/L assumes 100 troy ounces per standard lot and a 0.07 lot size. It estimates $0.10/oz adverse slippage at entry and exit and $7 per standard lot round trip in illustrative fees; these are NOT verified FundingPips prices or commissions. Results should not be used to make real-money decisions until source accuracy, contract specifications, intrabar gaps, practical fills, data coverage, and independent held-out performance are validated.
+- The first-trade +$70 feasibility rule, realistic news/session control, and full FundingPips rules are NOT implemented. A 2R hypothetical target under a $30 risk cap may never meet the $70 first-trade constraint; **do not describe this replay as fully compliant**.
+- Data provenance is based on download URLs and local file metadata, not a cryptographic guarantee. The core engine checks a caller-supplied source tag, which is NOT sufficient on its own to prove data authenticity.
+- Existing `fxbot` and its optional automated trading/scanning workflows are not changed. Do **not** enable its broker connectors or trading features for FundingPips.
+- The draft Pull Request stays unmerged until tests and quality checks are completed.
 
-The module intentionally prioritizes a reliable input/analysis boundary over an attractive but misleading live interface.
+## Data caveats
+
+Dukascopy provides a distinct historical quote stream. The platform uses source-specific prices that may differ from FundingPips or Exness. Historical BID and ASK must be compared with other trusted sources, and missing/partial days and rate limits must fail visibly. M15/M5 candle timestamps are **bar opens in UTC**, not decision times. Same-bar stop+target outcomes are conservatively classified as SL_AMBIGUOUS.
