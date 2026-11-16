@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Gold Trade Compass | Research Dashboard</title>
+<style>
+:root{color-scheme:dark;--bg:#0d1016;--panel:#191d26;--text:#f0f3f8;--muted:#a0a8b5;--yellow:#ffcf3a;--line:#353947}
+*{box-sizing:border-box}body{margin:0;font:15px/1.8 system-ui,"Cairo",Tahoma,sans-serif;background:var(--bg);color:var(--text)}
+main{max-width:1240px;margin:auto;padding:28px 16px 70px}.top{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:14px}
+h1{font-size:clamp(24px,4vw,34px);margin:0;font-weight:850;letter-spacing:-.8px}h2{font-size:19px;margin:0 0 12px}
+.gold{color:var(--yellow)}.tag{font-size:12px;border:1px solid #7b6229;color:#ffdf74;padding:4px 11px;border-radius:99px}
+p,.fine{color:var(--muted)}p{margin:8px 0 16px}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.panel,.stat{border:1px solid var(--line);background:var(--panel);border-radius:15px;padding:16px}
+.stat b{display:block;font-size:25px;direction:ltr;text-align:right}.stat small{color:var(--muted)}
+.controls{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:18px 0}
+label.upload{display:inline-flex;align-items:center;gap:8px;cursor:pointer;border:1px solid #685429;color:var(--yellow);background:#312816;padding:10px 16px;border-radius:10px;font-weight:700}
+input[type=file]{display:none}select{background:var(--panel);border:1px solid var(--line);padding:10px;color:var(--text);border-radius:10px}
+table{width:100%;border-collapse:collapse;font-size:13px;min-width:760px}th,td{padding:11px 10px;text-align:right;border-bottom:1px solid var(--line)}
+th{color:var(--muted);font-weight:600}td.num{direction:ltr;text-align:right;font-variant-numeric:tabular-nums}
+.table-wrap{overflow-x:auto}.buy{color:#61db98;font-weight:750}.sell{color:#ff8989;font-weight:750}
+.note{background:#271f11;border:1px solid #766026;border-radius:12px;padding:14px;color:#ffe7ac}
+#status{min-height:30px;color:var(--muted)}.empty{padding:30px;text-align:center;color:var(--muted)}
+#overview{display:none}.meta{font-size:12px;color:var(--muted);word-break:break-all}
+@media(max-width:800px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.stat b{font-size:20px}}
+</style></head><body>
+<main>
+<header class="top">
+<div><h1><span class="gold">GOLD</span> TRADE COMPASS</h1><p>لوحة مراجعة نتائج الاستراتيجية — XAUUSD · H1 / M15 / M5</p></div>
+<span class="tag">HISTORICAL RESEARCH ONLY · NO LIVE TRADING</span>
+</header>
+<section class="note">هذه الواجهة لا تقرأ أي حساب تداول ولا ترسل أوامر. لا توجد أسعار حية هنا، ولا يتم عرض أي إشارة على أنها توصية مؤكدة. افتح فقط تقرير JSON أنتجته أداة الاختبار التاريخي.</section>
+<div class="controls">
+<label class="upload" for="upload">تحميل تقرير Backtest محلياً <span>＋</span></label>
+<input id="upload" type="file" accept=".json,application/json" aria-label="اختيار تقرير JSON">
+<label for="period">الفترة:</label>
+<select id="period"><option value="6">آخر 6 أيام من آخر صفقة</option><option value="all">كل الصفقات</option></select>
+</div>
+<div id="status" role="status">لا توجد بيانات محملة. لا يتم إرسال الملف لأي خادم.</div>
+<div id="overview">
+<section class="grid" aria-label="إحصائيات الاختبار">
+<div class="stat"><small>الصفقات المختبرة</small><b id="count">—</b></div>
+<div class="stat"><small>TP / SL (بعد احتساب الغموض ضمن SL)</small><b id="tp_sl">—</b></div>
+<div class="stat"><small>Win Rate لصفقات TP وSL فقط</small><b id="rate">—</b></div>
+<div class="stat"><small>الربح / الخسارة التقديري بالدولار</small><b id="pnl">—</b></div>
+</section>
+<section class="panel" style="margin-top:18px">
+<h2>النتائج التاريخية</h2>
+<div class="fine" id="subset"></div>
+<div class="table-wrap"><table><thead><tr><th>توقيت الإشارة UTC</th><th>القرار</th><th>الدخول</th><th>SL</th><th>TP نظري (2R)</th><th>النتيجة</th><th>P/L بعد التكاليف المفترضة</th></tr></thead><tbody id="trades"></tbody></table></div>
+</section>
+<section class="panel" style="margin-top:18px"><h2>مصدر البيانات والافتراضات</h2><div id="assumptions" class="meta"></div></section>
+</div>
+</main>
+<script>
+"use strict";
+let report=null;
+const byId=(id)=>document.getElementById(id);
+const asPrice=(v)=> Number.isFinite(Number(v))? Number(v).toFixed(3):"—";
+const asMoney=(v)=> Number.isFinite(Number(v))? Number(v).toFixed(2)+" $":"—";
+const el=(tag,text,klass)=>{const n=document.createElement(tag);n.textContent=String(text??"—");if(klass)n.className=klass;return n};
+function render(){
+  if(!report)return;
+  const all=report.trades,period=byId("period").value;
+  let filtered=all;
+  if(period==="6" && all.length){
+    const newest=Math.max(...all.map(t=>Date.parse(t.signal_utc)).filter(Number.isFinite));
+    const limit=newest-6*24*60*60*1000;
+    filtered=all.filter(t=>Date.parse(t.signal_utc)>=limit);
+  }
+  const tp=filtered.filter(t=>t.outcome==="TP").length;
+  const sl=filtered.filter(t=>t.outcome==="SL"||t.outcome==="SL_AMBIGUOUS").length;
+  const pnl=filtered.reduce((a,t)=>a+Number(t.pnl_usd||0),0);
+  byId("count").textContent=filtered.length;
+  byId("tp_sl").textContent=tp+" / "+sl;
+  byId("rate").textContent=(tp+sl? (100*tp/(tp+sl)).toFixed(1)+"%":"—");
+  byId("pnl").textContent=asMoney(pnl);
+  byId("subset").textContent=period==="6"?"آخر 6 أيام محسوبة من آخر إشارة في الملف، لا من تاريخ اليوم":"كل الفترة في الملف";
+  const rows=byId("trades");rows.replaceChildren();
+  if(!filtered.length){const t=el("td","لا توجد صفقات مسجلة في الفترة");t.colSpan=7;t.className="empty";const tr=document.createElement("tr");tr.appendChild(t);rows.appendChild(tr)}
+  filtered.slice().reverse().forEach(t=>{
+    const tr=document.createElement("tr");
+    [[t.signal_utc],[t.side,t.side==="BUY"?"buy":"sell"],
+      [asPrice(t.entry_bid_or_ask),"num"],[asPrice(t.sl),"num"],[asPrice(t.hypothetical_tp_2r),"num"],
+      [t.outcome],[asMoney(t.pnl_usd),"num"]].forEach(([v,c])=>tr.appendChild(el("td",v,c)));
+    rows.appendChild(tr);
+  });
+  byId("assumptions").textContent=
+    "Source: "+report.source+" | Quote: "+report.quote_basis+
+    " | State: "+report.state+" | Limits timezone: "+report.time_zone_for_daily_limits+
+    " | Assumptions: "+JSON.stringify(report.assumptions||{});
+}
+byId("period").addEventListener("change",render);
+byId("upload").addEventListener("change", async(ev)=>{
+  const file=ev.target.files?.[0];if(!file)return;
+  try {
+    if(file.size>8_000_000)throw Error("الملف كبير أكثر من 8MB");
+    const data=JSON.parse(await file.text());
+    if(data.state!=="HISTORICAL_RESEARCH_ONLY"||data.symbol!=="XAUUSD"||!Array.isArray(data.trades))
+      throw Error("الملف ليس تقرير Gold Trade Compass تاريخياً");
+    if(data.trades.some(t=>!Number.isFinite(Number(t.pnl_usd))||!t.signal_utc||!t.outcome))
+      throw Error("الصفقات في التقرير غير صالحة");
+    report=data;
+    byId("overview").style.display="block";
+    byId("status").textContent="تم تحميل تقرير "+file.name+" محلياً. التقرير لا يمثل أسعاراً حية.";
+    render();
+  } catch(err) {
+    report=null;byId("overview").style.display="none";
+    byId("status").textContent="خطأ: "+err.message;
+  }
+});
+</script></body></html>
